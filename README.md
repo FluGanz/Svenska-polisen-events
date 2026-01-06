@@ -21,7 +21,7 @@ Detta är en enkel Home Assistant "custom integration" som hämtar öppna hände
 - Gå till **Settings → Devices & services → Add integration**
 - Sök efter **Polisen Events**
 - Fyll i:
-  - Area (t.ex. `Malmö`, `Lund`, `Stockholms län`)
+  - Area (t.ex. `Malmö`, `Lund` – det som matchas är text i `location.name` från Polisens API)
   - Match mode: `contains` (standard) eller `exact`
   - Hours: hur långt bak i tiden som ska räknas (standard 24)
   - Max items: max antal händelser som läggs i attribut (standard 5)
@@ -34,7 +34,10 @@ Detta är en enkel Home Assistant "custom integration" som hämtar öppna hände
   - `events` (lista, max `max_items`) med rubriker + länkar
   - `count` (antal matchande händelser i tidsfönstret)
 
-## Lovelace (Dashboard) – template/markdown card
+## Lovelace (Dashboard) – kort
+
+Det som ser “snyggt” ut beror lite på vilka extra kort du redan använder.
+Här är tre alternativ: inbyggt (`markdown`) och två populära custom cards.
 
 ### Visa senaste rubriken + klickbar länk
 
@@ -51,6 +54,61 @@ content: >
   {% else %}
   Inga matchande händelser senaste {{ state_attr('sensor.polisen_events', 'hours') or 24 }} timmar.
   {% endif %}
+```
+
+### Snyggare kort (Mushroom – `custom:mushroom-template-card`)
+
+Kräver att du installerat Mushroom via HACS.
+
+```yaml
+type: custom:mushroom-template-card
+entity: sensor.polisen_events
+primary: >-
+  {% set e = state_attr('sensor.polisen_events', 'latest') %}
+  {{ e.name if e else 'Inga matchande händelser' }}
+secondary: >-
+  {% set e = state_attr('sensor.polisen_events', 'latest') %}
+  {% if e %}
+    {{ e.location.name }} • {{ e.type }} • {{ e.datetime }}
+  {% else %}
+    Senaste {{ state_attr('sensor.polisen_events', 'hours') or 24 }} timmar.
+  {% endif %}
+icon: mdi:police-badge
+multiline_secondary: true
+tap_action:
+  action: url
+  url_path: >-
+    {% set e = state_attr('sensor.polisen_events', 'latest') %}
+    {{ e.url if e else '' }}
+hold_action:
+  action: more-info
+```
+
+### Snyggare kort (button-card – `custom:button-card`)
+
+Kräver att du installerat button-card via HACS.
+
+```yaml
+type: custom:button-card
+entity: sensor.polisen_events
+name: >
+  [[[ return states['sensor.polisen_events'].state || 'Polisen'; ]]]
+label: >
+  [[[ 
+    const e = states['sensor.polisen_events'].attributes?.latest;
+    if (!e) return 'Inga matchande händelser';
+    const where = e.location?.name || '';
+    const when = e.datetime || '';
+    return `${where} • ${when}`;
+  ]]]
+show_label: true
+icon: mdi:police-badge
+tap_action:
+  action: url
+  url_path: >
+    [[[ return states['sensor.polisen_events'].attributes?.latest?.url || ''; ]]]
+hold_action:
+  action: more-info
 ```
 
 ### Visa en lista med flera händelser (rubrik + länk)
@@ -71,7 +129,11 @@ content: >
 
 ## Exempel
 
-Om du sätter Area till `Hallands län` får du länets händelser.
+Om du sätter Area till `Malmö` får du händelser där Polisens API returnerar `location.name` som innehåller “Malmö”.
+
+Exempel med flera områden:
+
+- `Malmö / Lund / Eslöv`
 
 ## Notering
 
