@@ -36,25 +36,7 @@ Detta är en enkel Home Assistant "custom integration" som hämtar öppna hände
 
 ## Lovelace (Dashboard) – kort
 
-Det som ser “snyggt” ut beror lite på vilka extra kort du redan använder.
-Här är tre alternativ: inbyggt (`markdown`) och två populära custom cards.
-
-### Visa senaste rubriken + klickbar länk
-
-```yaml
-type: markdown
-title: Polisen (senaste)
-content: >
-  {% set e = state_attr('sensor.polisen_events', 'latest') %}
-  {% if e %}
-  [{{ e.name }}]({{ e.url }})  
-  {{ e.location.name }} • {{ e.type }} • {{ e.datetime }}
-
-  Matchade: {{ (e.matched_areas | default([])) | join(', ') }}
-  {% else %}
-  Inga matchande händelser senaste {{ state_attr('sensor.polisen_events', 'hours') or 24 }} timmar.
-  {% endif %}
-```
+Här är två snyggare kort-alternativ (custom cards) som kan visa senaste rubriken och öppna polisens länk vid klick.
 
 ### Snyggare kort (Mushroom – `custom:mushroom-template-card`)
 
@@ -109,22 +91,6 @@ tap_action:
     [[[ return states['sensor.polisen_events'].attributes?.latest?.url || ''; ]]]
 hold_action:
   action: more-info
-```
-
-### Visa en lista med flera händelser (rubrik + länk)
-
-```yaml
-type: markdown
-title: Polisen (lista)
-content: >
-  {% set events = state_attr('sensor.polisen_events', 'events') | default([]) %}
-  {% if events | length == 0 %}
-  Inga matchande händelser.
-  {% else %}
-  {% for e in events %}
-  - [{{ e.name }}]({{ e.url }}) ({{ e.location.name }})
-  {% endfor %}
-  {% endif %}
 ```
 
 ## Exempel
