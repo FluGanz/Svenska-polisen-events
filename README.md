@@ -28,9 +28,46 @@ Detta är en enkel Home Assistant "custom integration" som hämtar öppna hände
 
 ## Sensor
 
-- State: antal matchande händelser inom tidsfönstret
+- State: senaste händelsens rubrik ("name")
 - Attributes:
-  - `events` (lista, max `max_items`)
+  - `latest` (dict) med `name`, `url`, `datetime`, `type`, `location`, `matched_areas`
+  - `events` (lista, max `max_items`) med rubriker + länkar
+  - `count` (antal matchande händelser i tidsfönstret)
+
+## Lovelace (Dashboard) – template/markdown card
+
+### Visa senaste rubriken + klickbar länk
+
+```yaml
+type: markdown
+title: Polisen (senaste)
+content: >
+  {% set e = state_attr('sensor.polisen_events', 'latest') %}
+  {% if e %}
+  [{{ e.name }}]({{ e.url }})  
+  {{ e.location.name }} • {{ e.type }} • {{ e.datetime }}
+
+  Matchade: {{ (e.matched_areas | default([])) | join(', ') }}
+  {% else %}
+  Inga matchande händelser senaste {{ state_attr('sensor.polisen_events', 'hours') or 24 }} timmar.
+  {% endif %}
+```
+
+### Visa en lista med flera händelser (rubrik + länk)
+
+```yaml
+type: markdown
+title: Polisen (lista)
+content: >
+  {% set events = state_attr('sensor.polisen_events', 'events') | default([]) %}
+  {% if events | length == 0 %}
+  Inga matchande händelser.
+  {% else %}
+  {% for e in events %}
+  - [{{ e.name }}]({{ e.url }}) ({{ e.location.name }})
+  {% endfor %}
+  {% endif %}
+```
 
 ## Exempel
 
@@ -38,4 +75,10 @@ Om du sätter Area till `Hallands län` får du länets händelser.
 
 ## Notering
 
-Polisens API saknar ett separat fält för "kommun" i svaret; detta bygger på textmatchning mot `location.name` från API:t.
+Polisens API saknar ett separat fält för t.ex. kommun/län-kod i svaret; detta bygger på textmatchning mot `location.name` från API:t.
+
+Det innebär t.ex. att:
+- En händelse som har `location.name = "Malmö"` matchar **Malmö**, men matchar inte automatiskt **Skåne län** (även om Malmö ligger i Skåne).
+- För att täcka en hel region idag behöver du lägga in flera områden i Area-fältet, t.ex. `Malmö / Eslöv / Löberöd`.
+
+För transparens sätter integrationen även `matched_areas` per event så du kan se exakt vilken del av din Area-lista som gav träff.

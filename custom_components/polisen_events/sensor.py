@@ -122,12 +122,18 @@ async def async_setup_entry(
             if isinstance(loc, dict):
                 loc_name = str(loc.get("name") or "")
 
+            matched_areas: list[str] = []
             if areas:
-                if not any(_matches_area(loc_name, a, str(match_mode)) for a in areas):
+                matched_areas = [a for a in areas if _matches_area(loc_name, a, str(match_mode))]
+                if not matched_areas:
                     continue
             else:
                 if not _matches_area(loc_name, str(area), str(match_mode)):
                     continue
+
+            # Attach match info for transparency in attributes
+            ev = dict(ev)
+            ev["matched_areas"] = matched_areas
 
             dt = _parse_dt(str(ev.get("datetime") or ""))
             if dt is None:
@@ -159,6 +165,7 @@ async def async_setup_entry(
                 "type": e.get("type"),
                 "url": url,
                 "location": (e.get("location") or {}),
+                "matched_areas": e.get("matched_areas", []),
             }
 
         return {
