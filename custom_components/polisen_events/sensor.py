@@ -189,6 +189,7 @@ async def async_setup_entry(
 
 class PolisenEventsSensor(SensorEntity):
     _attr_has_entity_name = True
+    _attr_icon = "mdi:police-badge"
 
     def __init__(self, entry: ConfigEntry, coordinator: DataUpdateCoordinator[dict[str, Any]]):
         self.entity_description = DESCRIPTION
@@ -205,7 +206,7 @@ class PolisenEventsSensor(SensorEntity):
         return self._coordinator.last_update_success
 
     @property
-    def native_value(self) -> int | None:
+    def native_value(self) -> str | None:
         data = self._coordinator.data
         if not isinstance(data, dict):
             return None
