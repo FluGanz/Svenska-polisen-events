@@ -54,18 +54,36 @@ def _parse_dt(dt_str: str) -> datetime | None:
 
 
 def _matches_area(location_name: str, area: str, match_mode: str) -> bool:
-    location_name = (location_name or "").strip().casefold()
-    area = (area or "").strip().casefold()
-    if not area:
+    location_name_cf = (location_name or "").strip().casefold()
+    area_cf = (area or "").strip().casefold()
+
+    if not area_cf:
         return True
-    if not location_name:
+    if not location_name_cf:
         return False
 
     if match_mode == "exact":
-        return location_name == area
+        return location_name_cf == area_cf
 
     # default: contains
-    return area in location_name
+    return area_cf in location_name_cf
+
+
+def _parse_areas(raw: str) -> list[str]:
+    # Allow multiple areas: "Malmö / Eslöv / Skåne län" or "Malmö,Eslöv" etc.
+    raw = (raw or "").strip()
+    if not raw:
+        return []
+
+    parts: list[str] = [raw]
+    for delim in ["/", ",", ";", "|", "\n"]:
+        next_parts: list[str] = []
+        for p in parts:
+            next_parts.extend(p.split(delim))
+        parts = next_parts
+
+    cleaned = [p.strip() for p in parts]
+    return [p for p in cleaned if p]
 
 
 async def async_setup_entry(
@@ -77,6 +95,7 @@ async def async_setup_entry(
     match_mode = entry.data.get(CONF_MATCH_MODE, DEFAULT_MATCH_MODE)
     hours = int(entry.data.get(CONF_HOURS, DEFAULT_HOURS))
     max_items = int(entry.data.get(CONF_MAX_ITEMS, DEFAULT_MAX_ITEMS))
+    areas = _parse_areas(str(area))
 
     session = async_get_clientsession(hass)
 
@@ -103,8 +122,12 @@ async def async_setup_entry(
             if isinstance(loc, dict):
                 loc_name = str(loc.get("name") or "")
 
-            if not _matches_area(loc_name, str(area), str(match_mode)):
-                continue
+            if areas:
+                if not any(_matches_area(loc_name, a, str(match_mode)) for a in areas):
+                    continue
+            else:
+                if not _matches_area(loc_name, str(area), str(match_mode)):
+                    continue
 
             dt = _parse_dt(str(ev.get("datetime") or ""))
             if dt is None:
@@ -122,22 +145,26 @@ async def async_setup_entry(
         filtered.sort(key=lambda e: str(e.get("datetime") or ""), reverse=True)
 
         trimmed: list[dict[str, Any]] = filtered[: max(0, max_items)]
+        latest = trimmed[0] if trimmed else None
+
+        def _to_public_event(e: dict[str, Any]) -> dict[str, Any]:
+            url = e.get("url")
+            if isinstance(url, str) and url.startswith("/"):
+                url = "https://polisen.se" + url
+
+            return {
+                "id": e.get("id"),
+                "datetime": e.get("datetime"),
+                "name": e.get("name"),
+                "type": e.get("type"),
+                "url": url,
+                "location": (e.get("location") or {}),
+            }
 
         return {
             "count": len(filtered),
-            "events": [
-                {
-                    "id": e.get("id"),
-                    "datetime": e.get("datetime"),
-                    "name": e.get("name"),
-                    "summary": e.get("summary"),
-                    "type": e.get("type"),
-                    "url": ("https://polisen.se" + e.get("url")) if isinstance(e.get("url"), str) and e.get("url").startswith("/") else e.get("url"),
-                    "location": (e.get("location") or {}),
-                }
-                for e in trimmed
-                if isinstance(e, dict)
-            ],
+            "latest": _to_public_event(latest) if isinstance(latest, dict) else None,
+            "events": [_to_public_event(e) for e in trimmed if isinstance(e, dict)],
         }
 
     coordinator = DataUpdateCoordinator(
@@ -175,17 +202,28 @@ class PolisenEventsSensor(SensorEntity):
         data = self._coordinator.data
         if not isinstance(data, dict):
             return None
-        return int(data.get("count") or 0)
+        latest = data.get("latest")
+        if isinstance(latest, dict):
+            name = latest.get("name")
+            if isinstance(name, str) and name.strip():
+                return name
+        return None
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         data = self._coordinator.data
         if not isinstance(data, dict):
             return {}
+
+        latest = data.get("latest") if isinstance(data.get("latest"), dict) else None
+
         return {
             "area": self._entry.data.get(CONF_AREA),
             "match_mode": self._entry.data.get(CONF_MATCH_MODE),
             "hours": self._entry.data.get(CONF_HOURS),
+            "max_items": self._entry.data.get(CONF_MAX_ITEMS),
+            "count": data.get("count", 0),
+            "latest": latest,
             "events": data.get("events", []),
         }
 

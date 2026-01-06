@@ -1,7 +1,7 @@
 {
   "domain": "polisen_events",
   "name": "Polisen Events",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "documentation": "https://github.com/FluGanz/Svenska-polisen-events",
   "issue_tracker": "https://github.com/FluGanz/Svenska-polisen-events/issues",
   "requirements": [],
