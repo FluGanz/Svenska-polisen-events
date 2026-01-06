@@ -42,6 +42,8 @@ Här är två snyggare kort-alternativ (custom cards) som kan visa senaste rubri
 
 Kräver att du installerat Mushroom via HACS.
 
+Obs: Mushroom Template Card stödjer templating i texter, men `tap_action.url_path` templatas inte alltid av Home Assistant-frontend. Om du lägger en template där kan den skickas vidare som rå text (och du hamnar på en `/lovelace/...`-URL som ser ut som din template). För en klickbar länk till senaste händelsen rekommenderas därför button-card-exemplet nedan.
+
 ```yaml
 type: custom:mushroom-template-card
 entity: sensor.polisen_events
@@ -58,10 +60,7 @@ secondary: >-
 icon: mdi:police-badge
 multiline_secondary: true
 tap_action:
-  action: url
-  url_path: >-
-    {% set e = state_attr('sensor.polisen_events', 'latest') %}
-    {{ e.url if e else '' }}
+  action: more-info
 hold_action:
   action: more-info
 ```
