@@ -98,7 +98,7 @@ Om du sätter Area till `Malmö` får du händelser där Polisens API returnerar
 
 Exempel med flera områden:
 
-- `Malmö / Lund / Eslöv`
+- `Malmö / Helsingborg / Ystad`
 
 ## Notering
 
@@ -106,6 +106,6 @@ Polisens API saknar ett separat fält för t.ex. kommun/län-kod i svaret; detta
 
 Det innebär t.ex. att:
 - En händelse som har `location.name = "Malmö"` matchar **Malmö**, men matchar inte automatiskt **Skåne län** (även om Malmö ligger i Skåne).
-- För att täcka en hel region idag behöver du lägga in flera områden i Area-fältet, t.ex. `Malmö / Eslöv / Löberöd`.
+- För att täcka en hel region idag behöver du lägga in flera områden i Area-fältet, t.ex. `Malmö / Helsingborg / Ystad`.
 
 För transparens sätter integrationen även `matched_areas` per event så du kan se exakt vilken del av din Area-lista som gav träff.
