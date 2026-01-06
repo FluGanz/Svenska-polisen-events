@@ -1,0 +1,16 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Polisen Events",
+        "description": "Hämtar öppna händelser från Polisen och filtrerar på platsnamn (stad/kommun/län).",
+        "data": {
+          "area": "Area (t.ex. Malmö / Lund / Stockholms län)",
+          "match_mode": "Match mode",
+          "hours": "Hours back",
+          "max_items": "Max events in attributes"
+        }
+      }
+    }
+  }
+}

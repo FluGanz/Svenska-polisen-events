@@ -1,0 +1,11 @@
+{
+  "domain": "polisen_events",
+  "name": "Polisen Events",
+  "version": "0.1.0",
+  "documentation": "https://github.com/REPLACE_ME/polisen-events",
+  "issue_tracker": "https://github.com/REPLACE_ME/polisen-events/issues",
+  "requirements": [],
+  "codeowners": [],
+  "config_flow": true,
+  "iot_class": "cloud_polling"
+}
