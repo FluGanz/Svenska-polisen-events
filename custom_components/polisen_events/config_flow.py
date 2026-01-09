@@ -51,6 +51,13 @@ class PolisenEventsOptionsFlowHandler(config_entries.OptionsFlow):
     def __init__(self, config_entry: config_entries.ConfigEntry) -> None:
         self.config_entry = config_entry
 
+    @staticmethod
+    def _as_int(value, default: int) -> int:
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return int(default)
+
     async def async_step_init(self, user_input=None):
         if user_input is not None:
             return self.async_create_entry(title="", data=user_input)
@@ -71,13 +78,12 @@ class PolisenEventsOptionsFlowHandler(config_entries.OptionsFlow):
                 ),
                 vol.Required(
                     CONF_HOURS,
-                    default=int(current.get(CONF_HOURS, DEFAULT_HOURS)),
+                    default=self._as_int(current.get(CONF_HOURS), DEFAULT_HOURS),
                 ): vol.All(int, vol.Range(min=1, max=168)),
                 vol.Required(
                     CONF_MAX_ITEMS,
-                    default=int(current.get(CONF_MAX_ITEMS, DEFAULT_MAX_ITEMS)),
+                    default=self._as_int(current.get(CONF_MAX_ITEMS), DEFAULT_MAX_ITEMS),
                 ): vol.All(int, vol.Range(min=0, max=50)),
-                
             }
         )
 
