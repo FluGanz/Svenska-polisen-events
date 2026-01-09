@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import voluptuous as vol
 
 from homeassistant import config_entries
@@ -14,6 +15,9 @@ from .const import (
     DEFAULT_MAX_ITEMS,
     DOMAIN,
 )
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 class PolisenEventsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
@@ -58,38 +62,52 @@ class PolisenEventsOptionsFlowHandler(config_entries.OptionsFlow):
         except (TypeError, ValueError):
             return int(default)
 
+    @staticmethod
+    def _as_area_str(value) -> str:
+        if value is None:
+            return ""
+        if isinstance(value, (list, tuple, set)):
+            return " / ".join(str(v) for v in value if str(v).strip())
+        return str(value)
+
     async def async_step_init(self, user_input=None):
         if user_input is not None:
             return self.async_create_entry(title="", data=user_input)
 
-        current = {**(self.config_entry.data or {}), **(self.config_entry.options or {})}
+        errors: dict[str, str] = {}
+        try:
+            current = {**(self.config_entry.data or {}), **(self.config_entry.options or {})}
 
-        area_default = str(current.get(CONF_AREA) or "")
-        match_mode_default = str(current.get(CONF_MATCH_MODE) or DEFAULT_MATCH_MODE)
-        if match_mode_default not in ("contains", "exact"):
-            match_mode_default = DEFAULT_MATCH_MODE
+            area_default = self._as_area_str(current.get(CONF_AREA))
+            match_mode_default = str(current.get(CONF_MATCH_MODE) or DEFAULT_MATCH_MODE)
+            if match_mode_default not in ("contains", "exact"):
+                match_mode_default = DEFAULT_MATCH_MODE
 
-        schema = vol.Schema(
-            {
-                vol.Required(CONF_AREA, default=area_default): str,
-                vol.Required(
-                    CONF_MATCH_MODE,
-                    default=match_mode_default,
-                ): vol.In(
-                    {
-                        "contains": "contains",
-                        "exact": "exact",
-                    }
-                ),
-                vol.Required(
-                    CONF_HOURS,
-                    default=self._as_int(current.get(CONF_HOURS), DEFAULT_HOURS),
-                ): vol.All(int, vol.Range(min=1, max=168)),
-                vol.Required(
-                    CONF_MAX_ITEMS,
-                    default=self._as_int(current.get(CONF_MAX_ITEMS), DEFAULT_MAX_ITEMS),
-                ): vol.All(int, vol.Range(min=0, max=50)),
-            }
-        )
+            schema = vol.Schema(
+                {
+                    vol.Required(CONF_AREA, default=area_default): str,
+                    vol.Required(
+                        CONF_MATCH_MODE,
+                        default=match_mode_default,
+                    ): vol.In(
+                        {
+                            "contains": "contains",
+                            "exact": "exact",
+                        }
+                    ),
+                    vol.Required(
+                        CONF_HOURS,
+                        default=self._as_int(current.get(CONF_HOURS), DEFAULT_HOURS),
+                    ): vol.All(int, vol.Range(min=1, max=168)),
+                    vol.Required(
+                        CONF_MAX_ITEMS,
+                        default=self._as_int(current.get(CONF_MAX_ITEMS), DEFAULT_MAX_ITEMS),
+                    ): vol.All(int, vol.Range(min=0, max=50)),
+                }
+            )
+        except Exception:  # noqa: BLE001
+            LOGGER.exception("Failed to build options schema")
+            errors["base"] = "unknown"
+            schema = vol.Schema({vol.Required(CONF_AREA, default=""): str})
 
-        return self.async_show_form(step_id="init", data_schema=schema)
+        return self.async_show_form(step_id="init", data_schema=schema, errors=errors)
