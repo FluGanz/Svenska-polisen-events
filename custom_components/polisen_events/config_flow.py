@@ -53,7 +53,7 @@ class PolisenEventsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
 class PolisenEventsOptionsFlowHandler(config_entries.OptionsFlow):
     def __init__(self, config_entry: config_entries.ConfigEntry) -> None:
-        self.config_entry = config_entry
+        self._config_entry = config_entry
 
     @staticmethod
     def _as_int(value, default: int) -> int:
@@ -76,7 +76,7 @@ class PolisenEventsOptionsFlowHandler(config_entries.OptionsFlow):
 
         errors: dict[str, str] = {}
         try:
-            current = {**(self.config_entry.data or {}), **(self.config_entry.options or {})}
+            current = {**(self._config_entry.data or {}), **(self._config_entry.options or {})}
 
             area_default = self._as_area_str(current.get(CONF_AREA))
             match_mode_default = str(current.get(CONF_MATCH_MODE) or DEFAULT_MATCH_MODE)
