@@ -64,12 +64,17 @@ class PolisenEventsOptionsFlowHandler(config_entries.OptionsFlow):
 
         current = {**(self.config_entry.data or {}), **(self.config_entry.options or {})}
 
+        area_default = str(current.get(CONF_AREA) or "")
+        match_mode_default = str(current.get(CONF_MATCH_MODE) or DEFAULT_MATCH_MODE)
+        if match_mode_default not in ("contains", "exact"):
+            match_mode_default = DEFAULT_MATCH_MODE
+
         schema = vol.Schema(
             {
-                vol.Required(CONF_AREA, default=current.get(CONF_AREA, "")): str,
+                vol.Required(CONF_AREA, default=area_default): str,
                 vol.Required(
                     CONF_MATCH_MODE,
-                    default=current.get(CONF_MATCH_MODE, DEFAULT_MATCH_MODE),
+                    default=match_mode_default,
                 ): vol.In(
                     {
                         "contains": "contains",
