@@ -4,6 +4,7 @@ import logging
 import voluptuous as vol
 
 from homeassistant import config_entries
+from homeassistant.helpers import selector
 
 from .const import (
     CONF_AREA,
@@ -24,15 +25,50 @@ class PolisenEventsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     VERSION = 1
 
     @staticmethod
+    def _coerce_and_validate(user_input: dict) -> tuple[dict, dict[str, str]]:
+        errors: dict[str, str] = {}
+
+        data = dict(user_input or {})
+
+        data[CONF_AREA] = str(data.get(CONF_AREA) or "")
+
+        match_mode = str(data.get(CONF_MATCH_MODE) or DEFAULT_MATCH_MODE)
+        if match_mode not in ("contains", "exact"):
+            errors[CONF_MATCH_MODE] = "invalid_match_mode"
+        data[CONF_MATCH_MODE] = match_mode
+
+        try:
+            hours = int(data.get(CONF_HOURS, DEFAULT_HOURS))
+        except (TypeError, ValueError):
+            hours = DEFAULT_HOURS
+            errors[CONF_HOURS] = "invalid_hours"
+        if not (1 <= hours <= 168):
+            errors[CONF_HOURS] = "invalid_hours"
+        data[CONF_HOURS] = hours
+
+        try:
+            max_items = int(data.get(CONF_MAX_ITEMS, DEFAULT_MAX_ITEMS))
+        except (TypeError, ValueError):
+            max_items = DEFAULT_MAX_ITEMS
+            errors[CONF_MAX_ITEMS] = "invalid_max_items"
+        if not (0 <= max_items <= 50):
+            errors[CONF_MAX_ITEMS] = "invalid_max_items"
+        data[CONF_MAX_ITEMS] = max_items
+
+        return data, errors
+
+    @staticmethod
     def async_get_options_flow(config_entry: config_entries.ConfigEntry):
         return PolisenEventsOptionsFlowHandler(config_entry)
 
     async def async_step_user(self, user_input=None):
-        errors: dict[str, str] = {}
-
         if user_input is not None:
-            title = user_input.get(CONF_AREA) or "Polisen Events"
-            return self.async_create_entry(title=title, data=user_input)
+            data, errors = self._coerce_and_validate(user_input)
+            if not errors:
+                title = data.get(CONF_AREA) or "Polisen Events"
+                return self.async_create_entry(title=title, data=data)
+        else:
+            errors = {}
 
         schema = vol.Schema(
             {
@@ -43,8 +79,28 @@ class PolisenEventsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                         "exact": "exact",
                     }
                 ),
-                vol.Required(CONF_HOURS, default=DEFAULT_HOURS): vol.All(int, vol.Range(min=1, max=168)),
-                vol.Required(CONF_MAX_ITEMS, default=DEFAULT_MAX_ITEMS): vol.All(int, vol.Range(min=0, max=50)),
+                vol.Required(
+                    CONF_HOURS,
+                    default=DEFAULT_HOURS,
+                ): selector.NumberSelector(
+                    selector.NumberSelectorConfig(
+                        min=1,
+                        max=168,
+                        step=1,
+                        mode=selector.NumberSelectorMode.BOX,
+                    )
+                ),
+                vol.Required(
+                    CONF_MAX_ITEMS,
+                    default=DEFAULT_MAX_ITEMS,
+                ): selector.NumberSelector(
+                    selector.NumberSelectorConfig(
+                        min=0,
+                        max=50,
+                        step=1,
+                        mode=selector.NumberSelectorMode.BOX,
+                    )
+                ),
             }
         )
 
@@ -72,7 +128,11 @@ class PolisenEventsOptionsFlowHandler(config_entries.OptionsFlow):
 
     async def async_step_init(self, user_input=None):
         if user_input is not None:
-            return self.async_create_entry(title="", data=user_input)
+            data, errors = PolisenEventsConfigFlow._coerce_and_validate(user_input)
+            if not errors:
+                return self.async_create_entry(title="", data=data)
+        else:
+            errors = {}
 
         errors: dict[str, str] = {}
         try:
@@ -98,11 +158,25 @@ class PolisenEventsOptionsFlowHandler(config_entries.OptionsFlow):
                     vol.Required(
                         CONF_HOURS,
                         default=self._as_int(current.get(CONF_HOURS), DEFAULT_HOURS),
-                    ): vol.All(int, vol.Range(min=1, max=168)),
+                    ): selector.NumberSelector(
+                        selector.NumberSelectorConfig(
+                            min=1,
+                            max=168,
+                            step=1,
+                            mode=selector.NumberSelectorMode.BOX,
+                        )
+                    ),
                     vol.Required(
                         CONF_MAX_ITEMS,
                         default=self._as_int(current.get(CONF_MAX_ITEMS), DEFAULT_MAX_ITEMS),
-                    ): vol.All(int, vol.Range(min=0, max=50)),
+                    ): selector.NumberSelector(
+                        selector.NumberSelectorConfig(
+                            min=0,
+                            max=50,
+                            step=1,
+                            mode=selector.NumberSelectorMode.BOX,
+                        )
+                    ),
                 }
             )
         except Exception:  # noqa: BLE001
