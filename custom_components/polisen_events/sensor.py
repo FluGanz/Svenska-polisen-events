@@ -91,10 +91,12 @@ async def async_setup_entry(
     entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    area = entry.data.get(CONF_AREA, "")
-    match_mode = entry.data.get(CONF_MATCH_MODE, DEFAULT_MATCH_MODE)
-    hours = int(entry.data.get(CONF_HOURS, DEFAULT_HOURS))
-    max_items = int(entry.data.get(CONF_MAX_ITEMS, DEFAULT_MAX_ITEMS))
+    cfg = {**(entry.data or {}), **(entry.options or {})}
+
+    area = cfg.get(CONF_AREA, "")
+    match_mode = cfg.get(CONF_MATCH_MODE, DEFAULT_MATCH_MODE)
+    hours = int(cfg.get(CONF_HOURS, DEFAULT_HOURS))
+    max_items = int(cfg.get(CONF_MAX_ITEMS, DEFAULT_MAX_ITEMS))
     areas = _parse_areas(str(area))
 
     session = async_get_clientsession(hass)
@@ -225,11 +227,13 @@ class PolisenEventsSensor(SensorEntity):
 
         latest = data.get("latest") if isinstance(data.get("latest"), dict) else None
 
+        cfg = {**(self._entry.data or {}), **(self._entry.options or {})}
+
         return {
-            "area": self._entry.data.get(CONF_AREA),
-            "match_mode": self._entry.data.get(CONF_MATCH_MODE),
-            "hours": self._entry.data.get(CONF_HOURS),
-            "max_items": self._entry.data.get(CONF_MAX_ITEMS),
+            "area": cfg.get(CONF_AREA),
+            "match_mode": cfg.get(CONF_MATCH_MODE),
+            "hours": cfg.get(CONF_HOURS),
+            "max_items": cfg.get(CONF_MAX_ITEMS),
             "count": data.get("count", 0),
             "latest": latest,
             "events": data.get("events", []),
