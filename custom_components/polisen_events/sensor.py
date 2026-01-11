@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 import logging
@@ -10,7 +11,12 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
+from homeassistant.helpers.update_coordinator import (
+    CoordinatorEntity,
+    DataUpdateCoordinator,
+    UpdateFailed,
+)
+from homeassistant.util import slugify
 
 from .const import (
     API_URL,
@@ -18,9 +24,11 @@ from .const import (
     CONF_HOURS,
     CONF_MATCH_MODE,
     CONF_MAX_ITEMS,
+    CONF_UPDATE_INTERVAL,
     DEFAULT_HOURS,
     DEFAULT_MATCH_MODE,
     DEFAULT_MAX_ITEMS,
+    DEFAULT_UPDATE_INTERVAL,
     DOMAIN,
 )
 
@@ -97,63 +105,37 @@ async def async_setup_entry(
     match_mode = cfg.get(CONF_MATCH_MODE, DEFAULT_MATCH_MODE)
     hours = int(cfg.get(CONF_HOURS, DEFAULT_HOURS))
     max_items = int(cfg.get(CONF_MAX_ITEMS, DEFAULT_MAX_ITEMS))
+    update_interval = int(cfg.get(CONF_UPDATE_INTERVAL, DEFAULT_UPDATE_INTERVAL))
     areas = _parse_areas(str(area))
+
+    requested_areas: list[str] = []
+    seen = set()
+    for a in areas:
+        if not isinstance(a, str):
+            continue
+        a = a.strip()
+        if not a:
+            continue
+        a_cf = a.casefold()
+        if a_cf in seen:
+            continue
+        seen.add(a_cf)
+        requested_areas.append(a)
+
+    if not requested_areas:
+        requested_areas = [""]
 
     session = async_get_clientsession(hass)
 
     async def _async_update_data() -> dict[str, Any]:
-        try:
-            async with session.get(API_URL, timeout=15) as resp:
+        async def _fetch(params: dict[str, str] | None) -> list[dict[str, Any]]:
+            async with session.get(API_URL, params=params, timeout=15) as resp:
                 if resp.status != 200:
                     raise UpdateFailed(f"HTTP {resp.status}")
-                data = await resp.json()
-                if not isinstance(data, list):
+                payload = await resp.json()
+                if not isinstance(payload, list):
                     raise UpdateFailed("API returned non-list JSON")
-        except Exception as err:
-            raise UpdateFailed(str(err)) from err
-
-        now = datetime.now(timezone.utc)
-        cutoff = now - timedelta(hours=hours)
-
-        filtered: list[dict[str, Any]] = []
-        for ev in data:
-            if not isinstance(ev, dict):
-                continue
-            loc = ev.get("location")
-            loc_name = ""
-            if isinstance(loc, dict):
-                loc_name = str(loc.get("name") or "")
-
-            matched_areas: list[str] = []
-            if areas:
-                matched_areas = [a for a in areas if _matches_area(loc_name, a, str(match_mode))]
-                if not matched_areas:
-                    continue
-            else:
-                if not _matches_area(loc_name, str(area), str(match_mode)):
-                    continue
-
-            # Attach match info for transparency in attributes
-            ev = dict(ev)
-            ev["matched_areas"] = matched_areas
-
-            dt = _parse_dt(str(ev.get("datetime") or ""))
-            if dt is None:
-                continue
-
-            # normalize naive datetimes as local? safest is to skip
-            if dt.tzinfo is None:
-                continue
-
-            if dt.astimezone(timezone.utc) < cutoff:
-                continue
-
-            filtered.append(ev)
-
-        filtered.sort(key=lambda e: str(e.get("datetime") or ""), reverse=True)
-
-        trimmed: list[dict[str, Any]] = filtered[: max(0, max_items)]
-        latest = trimmed[0] if trimmed else None
+                return [e for e in payload if isinstance(e, dict)]
 
         def _to_public_event(e: dict[str, Any]) -> dict[str, Any]:
             url = e.get("url")
@@ -167,52 +149,99 @@ async def async_setup_entry(
                 "type": e.get("type"),
                 "url": url,
                 "location": (e.get("location") or {}),
-                "matched_areas": e.get("matched_areas", []),
             }
 
-        return {
-            "count": len(filtered),
-            "latest": _to_public_event(latest) if isinstance(latest, dict) else None,
-            "events": [_to_public_event(e) for e in trimmed if isinstance(e, dict)],
-        }
+        now = datetime.now(timezone.utc)
+        cutoff = now - timedelta(hours=hours)
+
+        # Important: The global endpoint is limited and can miss older events for a
+        # specific municipality when there are many events nationwide.
+        # Query Polisen with `locationname` per selected area and keep results separate.
+        tasks: list[asyncio.Task[list[dict[str, Any]]]] = []
+        for a in requested_areas:
+            params = {"locationname": a} if a else None
+            tasks.append(asyncio.create_task(_fetch(params)))
+
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        by_area: dict[str, dict[str, Any]] = {}
+        for a, result in zip(requested_areas, results, strict=False):
+            if isinstance(result, Exception):
+                LOGGER.warning("Failed to fetch events for area '%s': %s", a, result)
+                by_area[a] = {"count": 0, "latest": None, "events": []}
+                continue
+
+            scored: list[tuple[datetime, dict[str, Any]]] = []
+            for ev in result:
+                dt = _parse_dt(str(ev.get("datetime") or ""))
+                if dt is None or dt.tzinfo is None:
+                    continue
+                dt_utc = dt.astimezone(timezone.utc)
+                if dt_utc < cutoff:
+                    continue
+
+                scored.append((dt_utc, ev))
+
+            scored.sort(key=lambda item: item[0], reverse=True)
+            filtered = [ev for _dt, ev in scored]
+            trimmed = filtered[: max(0, max_items)]
+            latest = trimmed[0] if trimmed else None
+
+            by_area[a] = {
+                "count": len(filtered),
+                "latest": _to_public_event(latest) if isinstance(latest, dict) else None,
+                "events": [_to_public_event(e) for e in trimmed if isinstance(e, dict)],
+            }
+
+        return {"by_area": by_area}
 
     coordinator = DataUpdateCoordinator(
         hass,
         logger=LOGGER,
-        name=f"Polisen Events ({area})",
+        name="Polisen Events",
         update_method=_async_update_data,
-        update_interval=timedelta(minutes=5),
+        update_interval=timedelta(minutes=max(1, update_interval)),
     )
 
     await coordinator.async_config_entry_first_refresh()
 
-    async_add_entities([PolisenEventsSensor(entry, coordinator)])
+    entities: list[SensorEntity] = [
+        PolisenEventsAllSensor(entry, coordinator),
+        *[PolisenEventsAreaSensor(entry, coordinator, a) for a in requested_areas],
+    ]
+    async_add_entities(entities)
 
 
-class PolisenEventsSensor(SensorEntity):
-    _attr_has_entity_name = True
+class PolisenEventsAreaSensor(CoordinatorEntity[dict[str, Any]], SensorEntity):
     _attr_icon = "mdi:police-badge"
 
-    def __init__(self, entry: ConfigEntry, coordinator: DataUpdateCoordinator[dict[str, Any]]):
+    def __init__(
+        self,
+        entry: ConfigEntry,
+        coordinator: DataUpdateCoordinator[dict[str, Any]],
+        area: str,
+    ) -> None:
+        super().__init__(coordinator)
         self.entity_description = DESCRIPTION
         self._entry = entry
-        self._coordinator = coordinator
-        self._attr_unique_id = f"{entry.entry_id}_events"
+        self._area = (area or "").strip()
 
-    @property
-    def should_poll(self) -> bool:
-        return False
-
-    @property
-    def available(self) -> bool:
-        return self._coordinator.last_update_success
+        area_slug = slugify(self._area) if self._area else "alla"
+        self._attr_unique_id = f"{entry.entry_id}_events_{area_slug}"
+        self._attr_name = f"Polis {self._area}" if self._area else "Polis (alla)"
 
     @property
     def native_value(self) -> str | None:
-        data = self._coordinator.data
+        data = self.coordinator.data
         if not isinstance(data, dict):
             return None
-        latest = data.get("latest")
+        by_area = data.get("by_area")
+        if not isinstance(by_area, dict):
+            return None
+        bucket = by_area.get(self._area)
+        if not isinstance(bucket, dict):
+            return None
+        latest = bucket.get("latest")
         if isinstance(latest, dict):
             name = latest.get("name")
             if isinstance(name, str) and name.strip():
@@ -221,26 +250,126 @@ class PolisenEventsSensor(SensorEntity):
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
-        data = self._coordinator.data
-        if not isinstance(data, dict):
-            return {}
-
-        latest = data.get("latest") if isinstance(data.get("latest"), dict) else None
-
         cfg = {**(self._entry.data or {}), **(self._entry.options or {})}
+
+        data = self.coordinator.data
+        by_area = data.get("by_area") if isinstance(data, dict) else None
+        bucket = by_area.get(self._area) if isinstance(by_area, dict) else None
+        if not isinstance(bucket, dict):
+            bucket = {"count": 0, "latest": None, "events": []}
+
+        latest = bucket.get("latest") if isinstance(bucket.get("latest"), dict) else None
+
+        return {
+            "area": self._area,
+            "match_mode": cfg.get(CONF_MATCH_MODE),
+            "hours": cfg.get(CONF_HOURS),
+            "max_items": cfg.get(CONF_MAX_ITEMS),
+            "update_interval": cfg.get(CONF_UPDATE_INTERVAL),
+            "count": bucket.get("count", 0),
+            "latest": latest,
+            "events": bucket.get("events", []),
+        }
+
+
+class PolisenEventsAllSensor(CoordinatorEntity[dict[str, Any]], SensorEntity):
+    _attr_icon = "mdi:police-badge"
+    _attr_entity_registry_enabled_default = False
+
+    def __init__(
+        self,
+        entry: ConfigEntry,
+        coordinator: DataUpdateCoordinator[dict[str, Any]],
+    ) -> None:
+        super().__init__(coordinator)
+        self.entity_description = DESCRIPTION
+        self._entry = entry
+        self._attr_unique_id = f"{entry.entry_id}_events"
+        self._attr_name = "Polis (samlat)"
+
+    @staticmethod
+    def _flatten_events(by_area: dict[str, Any]) -> tuple[int, list[dict[str, Any]]]:
+        total_count = 0
+        events: list[dict[str, Any]] = []
+        for area, bucket in by_area.items():
+            if not isinstance(bucket, dict):
+                continue
+            count = bucket.get("count")
+            if isinstance(count, int):
+                total_count += count
+            bucket_events = bucket.get("events")
+            if isinstance(bucket_events, list):
+                for ev in bucket_events:
+                    if not isinstance(ev, dict):
+                        continue
+                    ev2 = dict(ev)
+                    if area:
+                        ev2["requested_area"] = area
+                    events.append(ev2)
+        return total_count, events
+
+    @property
+    def native_value(self) -> str | None:
+        data = self.coordinator.data
+        if not isinstance(data, dict):
+            return None
+        by_area = data.get("by_area")
+        if not isinstance(by_area, dict):
+            return None
+        _count, events = self._flatten_events(by_area)
+
+        scored: list[tuple[datetime, dict[str, Any]]] = []
+        for ev in events:
+            dt = _parse_dt(str(ev.get("datetime") or ""))
+            if dt is None or dt.tzinfo is None:
+                continue
+            scored.append((dt.astimezone(timezone.utc), ev))
+        scored.sort(key=lambda item: item[0], reverse=True)
+        if not scored:
+            return None
+        latest = scored[0][1]
+        name = latest.get("name")
+        return name.strip() if isinstance(name, str) and name.strip() else None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        cfg = {**(self._entry.data or {}), **(self._entry.options or {})}
+
+        data = self.coordinator.data
+        by_area = data.get("by_area") if isinstance(data, dict) else None
+        if not isinstance(by_area, dict):
+            return {
+                "area": cfg.get(CONF_AREA),
+                "match_mode": cfg.get(CONF_MATCH_MODE),
+                "hours": cfg.get(CONF_HOURS),
+                "max_items": cfg.get(CONF_MAX_ITEMS),
+                "update_interval": cfg.get(CONF_UPDATE_INTERVAL),
+                "count": 0,
+                "latest": None,
+                "events": [],
+            }
+
+        total_count, events = self._flatten_events(by_area)
+
+        scored: list[tuple[datetime, dict[str, Any]]] = []
+        for ev in events:
+            dt = _parse_dt(str(ev.get("datetime") or ""))
+            if dt is None or dt.tzinfo is None:
+                continue
+            scored.append((dt.astimezone(timezone.utc), ev))
+        scored.sort(key=lambda item: item[0], reverse=True)
+
+        max_items = int(cfg.get(CONF_MAX_ITEMS, DEFAULT_MAX_ITEMS))
+        trimmed = [ev for _dt, ev in scored][: max(0, max_items)]
+        latest = trimmed[0] if trimmed else None
 
         return {
             "area": cfg.get(CONF_AREA),
             "match_mode": cfg.get(CONF_MATCH_MODE),
             "hours": cfg.get(CONF_HOURS),
             "max_items": cfg.get(CONF_MAX_ITEMS),
-            "count": data.get("count", 0),
+            "update_interval": cfg.get(CONF_UPDATE_INTERVAL),
+            "count": total_count,
             "latest": latest,
-            "events": data.get("events", []),
+            "events": trimmed,
         }
-
-    async def async_added_to_hass(self) -> None:
-        self.async_on_remove(self._coordinator.async_add_listener(self.async_write_ha_state))
-
-    async def async_update(self) -> None:
-        await self._coordinator.async_request_refresh()

@@ -28,11 +28,14 @@ Detta är en enkel Home Assistant "custom integration" som hämtar öppna hände
 
 ## Sensor
 
+Integrationen skapar en sensor per vald kommun/län.
+
 - State: senaste händelsens rubrik ("name")
 - Attributes:
-  - `latest` (dict) med `name`, `url`, `datetime`, `type`, `location`, `matched_areas`
+  - `latest` (dict) med `name`, `url`, `datetime`, `type`, `location`
   - `events` (lista, max `max_items`) med rubriker + länkar
-  - `count` (antal matchande händelser i tidsfönstret)
+  - `count` (antal händelser i tidsfönstret)
+  - `area` (vilken kommun/län sensorn avser)
 
 ## Lovelace (Dashboard) – kort
 
@@ -46,16 +49,16 @@ Obs: Mushroom Template Card stödjer templating i texter, men `tap_action.url_pa
 
 ```yaml
 type: custom:mushroom-template-card
-entity: sensor.polisen_events
+entity: sensor.polis_malmo
 primary: >-
-  {% set e = state_attr('sensor.polisen_events', 'latest') %}
+  {% set e = state_attr('sensor.polis_malmo', 'latest') %}
   {{ e.name if e else 'Inga matchande händelser' }}
 secondary: >-
-  {% set e = state_attr('sensor.polisen_events', 'latest') %}
+  {% set e = state_attr('sensor.polis_malmo', 'latest') %}
   {% if e %}
     {{ e.location.name }} • {{ e.type }} • {{ e.datetime }}
   {% else %}
-    Senaste {{ state_attr('sensor.polisen_events', 'hours') or 24 }} timmar.
+    Senaste {{ state_attr('sensor.polis_malmo', 'hours') or 24 }} timmar.
   {% endif %}
 icon: mdi:police-badge
 multiline_secondary: true
@@ -71,12 +74,12 @@ Kräver att du installerat button-card via HACS.
 
 ```yaml
 type: custom:button-card
-entity: sensor.polisen_events
+entity: sensor.polis_malmo
 name: >
-  [[[ return states['sensor.polisen_events'].state || 'Polisen'; ]]]
+  [[[ return states['sensor.polis_malmo'].state || 'Polisen'; ]]]
 label: >
   [[[ 
-    const e = states['sensor.polisen_events'].attributes?.latest;
+    const e = states['sensor.polis_malmo'].attributes?.latest;
     if (!e) return 'Inga matchande händelser';
     const where = e.location?.name || '';
     const when = e.datetime || '';
@@ -87,7 +90,7 @@ icon: mdi:police-badge
 tap_action:
   action: url
   url_path: >
-    [[[ return states['sensor.polisen_events'].attributes?.latest?.url || ''; ]]]
+    [[[ return states['sensor.polis_malmo'].attributes?.latest?.url || ''; ]]]
 hold_action:
   action: more-info
 ```

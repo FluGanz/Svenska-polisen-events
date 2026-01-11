@@ -8,7 +8,23 @@
           "area": "Area (t.ex. Malmö / Lund / Stockholms län)",
           "match_mode": "Match mode",
           "hours": "Hours back",
-          "max_items": "Max events in attributes"
+          "max_items": "Max events in attributes",
+          "update_interval": "Uppdateringsintervall (minuter)"
+        }
+      }
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Polisen Events",
+        "description": "Justera filtrering och hur ofta sensorn hämtar nya händelser.",
+        "data": {
+          "area": "Area (t.ex. Malmö / Lund / Stockholms län)",
+          "match_mode": "Match mode",
+          "hours": "Hours back",
+          "max_items": "Max events in attributes",
+          "update_interval": "Uppdateringsintervall (minuter)"
         }
       }
     }
