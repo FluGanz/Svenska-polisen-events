@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+import html
 import logging
 import re
 from typing import Any
@@ -80,12 +81,95 @@ _SW_MONTHS: dict[str, int] = {
 
 _EVENT_TIME_RE = re.compile(r"^\s*(\d{1,2})\s+([A-Za-zÅÄÖåäö]+)\s+(\d{1,2})\.(\d{2})")
 
+_DETAIL_PREAMBLE_RE = re.compile(r"<p\s+class=\"preamble\"[^>]*>\s*(.*?)\s*</p>", re.IGNORECASE | re.DOTALL)
+_DETAIL_BODY_RE = re.compile(
+    r"<div\s+class=\"text-body\s+editorial-html\"[^>]*>\s*(.*?)\s*</div>",
+    re.IGNORECASE | re.DOTALL,
+)
+_DETAIL_SENDER_RE = re.compile(
+    r"Text\s+av\s*</span>\s*<br\s*/?>\s*<span[^>]*>\s*(.*?)\s*</span>",
+    re.IGNORECASE | re.DOTALL,
+)
+_DETAIL_PUBLISHED_DISPLAY_RE = re.compile(
+    r"<time[^>]*class=\"date\"[^>]*>\s*(.*?)\s*</time>",
+    re.IGNORECASE | re.DOTALL,
+)
+_DETAIL_PUBLISHED_ISO_RE = re.compile(
+    r"<time[^>]*class=\"date\"[^>]*datetime=\"([^\"]+)\"",
+    re.IGNORECASE | re.DOTALL,
+)
+
+_DETAILS_TTL = timedelta(hours=12)
+_DETAILS_MAX_CONCURRENCY = 4
+
 
 def _format_dt_with_space_before_offset(dt: datetime) -> str:
     s = dt.isoformat(sep=" ")
     if len(s) >= 6 and s[-6] in ("+", "-"):
         return s[:-6] + " " + s[-6:]
     return s
+
+
+def _normalize_url(url: Any) -> str | None:
+    if not isinstance(url, str):
+        return None
+    u = url.strip()
+    if not u:
+        return None
+    if u.startswith("/"):
+        return "https://polisen.se" + u
+    return u
+
+
+def _html_to_text(fragment: str) -> str:
+    s = fragment or ""
+    s = re.sub(r"<\s*br\s*/?>", "\n", s, flags=re.IGNORECASE)
+    s = re.sub(r"</\s*p\s*>", "\n\n", s, flags=re.IGNORECASE)
+    s = re.sub(r"<\s*p[^>]*>", "", s, flags=re.IGNORECASE)
+    s = re.sub(r"<[^>]+>", "", s)
+    s = html.unescape(s)
+    s = re.sub(r"\n{3,}", "\n\n", s)
+    return s.strip()
+
+
+def _parse_event_details_from_html(page_html: str) -> dict[str, Any]:
+    """Parse subtitle/body/sender/published_display from a Polisen event page HTML."""
+
+    result: dict[str, Any] = {}
+    if not page_html:
+        return result
+
+    m = _DETAIL_PREAMBLE_RE.search(page_html)
+    if m:
+        subtitle = _html_to_text(m.group(1))
+        if subtitle:
+            result["subtitle"] = subtitle
+
+    m = _DETAIL_BODY_RE.search(page_html)
+    if m:
+        body = _html_to_text(m.group(1))
+        if body:
+            result["body"] = body
+
+    m = _DETAIL_SENDER_RE.search(page_html)
+    if m:
+        sender = _html_to_text(m.group(1))
+        if sender:
+            result["sender"] = sender
+
+    m = _DETAIL_PUBLISHED_DISPLAY_RE.search(page_html)
+    if m:
+        published_display = _html_to_text(m.group(1))
+        if published_display:
+            result["published_display"] = published_display
+
+    m = _DETAIL_PUBLISHED_ISO_RE.search(page_html)
+    if m:
+        published_iso = html.unescape(m.group(1)).strip()
+        if published_iso:
+            result["published_iso"] = published_iso
+
+    return result
 
 
 def _parse_event_dt_from_name(name: str, fallback: datetime | None) -> datetime | None:
@@ -219,6 +303,9 @@ async def async_setup_entry(
 
     session = async_get_clientsession(hass)
 
+    details_cache: dict[int, tuple[datetime, dict[str, Any]]] = {}
+    details_sem = asyncio.Semaphore(_DETAILS_MAX_CONCURRENCY)
+
     async def _async_update_data() -> dict[str, Any]:
         async def _fetch(params: dict[str, str] | None) -> list[dict[str, Any]]:
             async with session.get(API_URL, params=params, timeout=15) as resp:
@@ -229,20 +316,30 @@ async def async_setup_entry(
                     raise UpdateFailed("API returned non-list JSON")
                 return [e for e in payload if isinstance(e, dict)]
 
+        async def _fetch_details(url: str) -> dict[str, Any]:
+            async with details_sem:
+                async with session.get(url, timeout=15) as resp:
+                    if resp.status != 200:
+                        raise UpdateFailed(f"Details HTTP {resp.status}")
+                    text = await resp.text()
+            return _parse_event_details_from_html(text)
+
         def _to_public_event(e: dict[str, Any]) -> dict[str, Any]:
-            url = e.get("url")
-            if isinstance(url, str) and url.startswith("/"):
-                url = "https://polisen.se" + url
+            url = _normalize_url(e.get("url"))
 
             return {
                 "id": e.get("id"),
                 # Polisen API "datetime" is publish/update time; keep for compatibility.
                 "datetime": e.get("datetime"),
                 "published": e.get("datetime"),
+                "published_display": e.get("published_display"),
                 # Event time (händelsetid) parsed from `name`.
                 "event_datetime": e.get("event_datetime"),
                 "name": e.get("name"),
                 "summary": e.get("summary"),
+                "subtitle": e.get("subtitle"),
+                "body": e.get("body"),
+                "sender": e.get("sender"),
                 "type": e.get("type"),
                 "url": url,
                 "location": (e.get("location") or {}),
@@ -289,6 +386,37 @@ async def async_setup_entry(
             scored.sort(key=lambda item: item[0], reverse=True)
             filtered = [ev for _dt, ev in scored]
             trimmed = filtered[: max(0, max_items)]
+
+            # Enrich the visible events with details (subtitle/body/sender/published_display).
+            # Keep this lightweight by caching per event id.
+            now_utc = datetime.now(timezone.utc)
+
+            async def _enrich_one(ev2: dict[str, Any]) -> None:
+                ev_id = ev2.get("id")
+                if not isinstance(ev_id, int):
+                    return
+
+                cached = details_cache.get(ev_id)
+                if cached and (now_utc - cached[0]) < _DETAILS_TTL:
+                    ev2.update(cached[1])
+                    return
+
+                url = _normalize_url(ev2.get("url"))
+                if not url:
+                    return
+
+                try:
+                    details = await _fetch_details(url)
+                except Exception as err:  # noqa: BLE001
+                    LOGGER.debug("Failed to fetch details for event %s: %s", ev_id, err)
+                    return
+
+                if details:
+                    details_cache[ev_id] = (now_utc, details)
+                    ev2.update(details)
+
+            await asyncio.gather(*[_enrich_one(ev2) for ev2 in trimmed if isinstance(ev2, dict)])
+
             latest = trimmed[0] if trimmed else None
 
             by_area[a] = {
