@@ -4,6 +4,7 @@ import asyncio
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 import logging
+import re
 from typing import Any
 
 from homeassistant.components.sensor import SensorEntity, SensorEntityDescription
@@ -59,6 +60,69 @@ def _parse_dt(dt_str: str) -> datetime | None:
         return datetime.fromisoformat(dt_str)
     except ValueError:
         return None
+
+
+_SW_MONTHS: dict[str, int] = {
+    "januari": 1,
+    "februari": 2,
+    "mars": 3,
+    "april": 4,
+    "maj": 5,
+    "juni": 6,
+    "juli": 7,
+    "augusti": 8,
+    "september": 9,
+    "oktober": 10,
+    "november": 11,
+    "december": 12,
+}
+
+
+_EVENT_TIME_RE = re.compile(r"^\s*(\d{1,2})\s+([A-Za-zÅÄÖåäö]+)\s+(\d{1,2})\.(\d{2})")
+
+
+def _format_dt_with_space_before_offset(dt: datetime) -> str:
+    s = dt.isoformat(sep=" ")
+    if len(s) >= 6 and s[-6] in ("+", "-"):
+        return s[:-6] + " " + s[-6:]
+    return s
+
+
+def _parse_event_dt_from_name(name: str, fallback: datetime | None) -> datetime | None:
+    """Parse the event time (händelsetid) from Polisen's name field.
+
+    Example: "12 januari 22.16, Mordbrand, Helsingborg".
+    We use the year/tzinfo from the API datetime as fallback.
+    """
+
+    name = (name or "").strip()
+    if not name:
+        return fallback
+
+    match = _EVENT_TIME_RE.match(name)
+    if not match:
+        return fallback
+
+    day_s, month_s, hour_s, minute_s = match.groups()
+    month = _SW_MONTHS.get(month_s.casefold())
+    if not month:
+        return fallback
+
+    year = fallback.year if isinstance(fallback, datetime) else datetime.now().year
+    tzinfo = fallback.tzinfo if isinstance(fallback, datetime) and fallback.tzinfo else timezone.utc
+
+    try:
+        return datetime(
+            year,
+            month,
+            int(day_s),
+            int(hour_s),
+            int(minute_s),
+            0,
+            tzinfo=tzinfo,
+        )
+    except ValueError:
+        return fallback
 
 
 def _matches_area(location_name: str, area: str, match_mode: str) -> bool:
@@ -144,8 +208,13 @@ async def async_setup_entry(
 
             return {
                 "id": e.get("id"),
+                # Polisen API "datetime" is publish/update time; keep for compatibility.
                 "datetime": e.get("datetime"),
+                "published": e.get("datetime"),
+                # Event time (händelsetid) parsed from `name`.
+                "event_datetime": e.get("event_datetime"),
                 "name": e.get("name"),
+                "summary": e.get("summary"),
                 "type": e.get("type"),
                 "url": url,
                 "location": (e.get("location") or {}),
@@ -173,14 +242,21 @@ async def async_setup_entry(
 
             scored: list[tuple[datetime, dict[str, Any]]] = []
             for ev in result:
-                dt = _parse_dt(str(ev.get("datetime") or ""))
-                if dt is None or dt.tzinfo is None:
-                    continue
-                dt_utc = dt.astimezone(timezone.utc)
-                if dt_utc < cutoff:
+                published_dt = _parse_dt(str(ev.get("datetime") or ""))
+                if published_dt is None or published_dt.tzinfo is None:
                     continue
 
-                scored.append((dt_utc, ev))
+                event_dt = _parse_event_dt_from_name(str(ev.get("name") or ""), published_dt)
+                if event_dt is None or event_dt.tzinfo is None:
+                    continue
+
+                event_dt_utc = event_dt.astimezone(timezone.utc)
+                if event_dt_utc < cutoff:
+                    continue
+
+                ev2 = dict(ev)
+                ev2["event_datetime"] = _format_dt_with_space_before_offset(event_dt)
+                scored.append((event_dt_utc, ev2))
 
             scored.sort(key=lambda item: item[0], reverse=True)
             filtered = [ev for _dt, ev in scored]
