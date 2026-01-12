@@ -1,0 +1,32 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Polisen Events",
+        "description": "Hämtar öppna händelser från Polisen och filtrerar på platsnamn (kommun/län).",
+        "data": {
+          "area": "Område (t.ex. Malmö / Lund / Stockholms län)",
+          "match_mode": "Matchning",
+          "hours": "Timmar bakåt",
+          "max_items": "Max antal händelser i attribut",
+          "update_interval": "Uppdateringsintervall (minuter)"
+        }
+      }
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Polisen Events",
+        "description": "Justera filtrering och hur ofta sensorn hämtar nya händelser.",
+        "data": {
+          "area": "Område (t.ex. Malmö / Lund / Stockholms län)",
+          "match_mode": "Matchning",
+          "hours": "Timmar bakåt",
+          "max_items": "Max antal händelser i attribut",
+          "update_interval": "Uppdateringsintervall (minuter)"
+        }
+      }
+    }
+  }
+}

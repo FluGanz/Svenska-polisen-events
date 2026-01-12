@@ -41,6 +41,8 @@ Integrationen skapar en sensor per vald kommun/län.
 
 Här är två snyggare kort-alternativ (custom cards) som kan visa senaste rubriken och öppna polisens länk vid klick.
 
+Obs: Ett separat Lovelace-kort ("Polisen Card") finns i ett eget repo: https://github.com/FluGanz/Polisen-Card
+
 ### Snyggare kort (Mushroom – `custom:mushroom-template-card`)
 
 Kräver att du installerat Mushroom via HACS.
