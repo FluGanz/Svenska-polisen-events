@@ -112,7 +112,7 @@ def _parse_event_dt_from_name(name: str, fallback: datetime | None) -> datetime 
     tzinfo = fallback.tzinfo if isinstance(fallback, datetime) and fallback.tzinfo else timezone.utc
 
     try:
-        return datetime(
+        parsed = datetime(
             year,
             month,
             int(day_s),
@@ -123,6 +123,34 @@ def _parse_event_dt_from_name(name: str, fallback: datetime | None) -> datetime 
         )
     except ValueError:
         return fallback
+
+    # Handle year rollovers (e.g. title says "31 december" but publish is in January).
+    if isinstance(fallback, datetime) and parsed > fallback + timedelta(days=30):
+        try:
+            parsed = parsed.replace(year=year - 1)
+        except ValueError:
+            return fallback
+
+    # Polisen sometimes publishes after midnight about a late-night event.
+    # If the parsed event time ends up *after* the publish/update time, shift it back.
+    if isinstance(fallback, datetime) and parsed > fallback + timedelta(minutes=2):
+        parsed = parsed - timedelta(days=1)
+
+    return parsed
+
+
+def _event_sort_key(ev: dict[str, Any]) -> datetime | None:
+    """Return a UTC datetime used for sorting events newest-first.
+
+    Prefer event time (händelsetid) if available; fall back to published/updated time.
+    """
+
+    dt = _parse_dt(str(ev.get("event_datetime") or ""))
+    if dt is None or dt.tzinfo is None:
+        dt = _parse_dt(str(ev.get("datetime") or ""))
+    if dt is None or dt.tzinfo is None:
+        return None
+    return dt.astimezone(timezone.utc)
 
 
 def _matches_area(location_name: str, area: str, match_mode: str) -> bool:
@@ -396,10 +424,10 @@ class PolisenEventsAllSensor(CoordinatorEntity[dict[str, Any]], SensorEntity):
 
         scored: list[tuple[datetime, dict[str, Any]]] = []
         for ev in events:
-            dt = _parse_dt(str(ev.get("datetime") or ""))
-            if dt is None or dt.tzinfo is None:
+            dt = _event_sort_key(ev)
+            if dt is None:
                 continue
-            scored.append((dt.astimezone(timezone.utc), ev))
+            scored.append((dt, ev))
         scored.sort(key=lambda item: item[0], reverse=True)
         if not scored:
             return None
@@ -429,10 +457,10 @@ class PolisenEventsAllSensor(CoordinatorEntity[dict[str, Any]], SensorEntity):
 
         scored: list[tuple[datetime, dict[str, Any]]] = []
         for ev in events:
-            dt = _parse_dt(str(ev.get("datetime") or ""))
-            if dt is None or dt.tzinfo is None:
+            dt = _event_sort_key(ev)
+            if dt is None:
                 continue
-            scored.append((dt.astimezone(timezone.utc), ev))
+            scored.append((dt, ev))
         scored.sort(key=lambda item: item[0], reverse=True)
 
         max_items = int(cfg.get(CONF_MAX_ITEMS, DEFAULT_MAX_ITEMS))
