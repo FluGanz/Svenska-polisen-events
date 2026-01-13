@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 import html
 import logging
 import re
@@ -18,6 +18,7 @@ from homeassistant.helpers.update_coordinator import (
     DataUpdateCoordinator,
     UpdateFailed,
 )
+from homeassistant.util import dt as dt_util
 from homeassistant.util import slugify
 
 from .const import (
@@ -48,6 +49,20 @@ DESCRIPTION = PolisenSensorDescription(
     name="Polisen events",
     icon="mdi:police-badge",
 )
+
+
+def _day_priority_group(dt: datetime, today: date, yesterday: date) -> int:
+    """Return sort group for an event datetime.
+
+    0: today, 1: yesterday, 2: older (still within cutoff).
+    """
+
+    local_day = dt_util.as_local(dt).date()
+    if local_day == today:
+        return 0
+    if local_day == yesterday:
+        return 1
+    return 2
 
 
 def _parse_dt(dt_str: str) -> datetime | None:
@@ -347,6 +362,8 @@ async def async_setup_entry(
 
         now = datetime.now(timezone.utc)
         cutoff = now - timedelta(hours=hours)
+        today_local = dt_util.as_local(now).date()
+        yesterday_local = today_local - timedelta(days=1)
 
         # Important: The global endpoint is limited and can miss older events for a
         # specific municipality when there are many events nationwide.
@@ -365,7 +382,7 @@ async def async_setup_entry(
                 by_area[a] = {"count": 0, "latest": None, "events": []}
                 continue
 
-            scored: list[tuple[datetime, dict[str, Any]]] = []
+            scored: list[tuple[int, float, dict[str, Any]]] = []
             for ev in result:
                 published_dt = _parse_dt(str(ev.get("datetime") or ""))
                 if published_dt is None or published_dt.tzinfo is None:
@@ -381,11 +398,16 @@ async def async_setup_entry(
 
                 ev2 = dict(ev)
                 ev2["event_datetime"] = _format_dt_with_space_before_offset(event_dt)
-                scored.append((event_dt_utc, ev2))
+                group = _day_priority_group(event_dt, today_local, yesterday_local)
+                scored.append((group, -event_dt_utc.timestamp(), ev2))
 
-            scored.sort(key=lambda item: item[0], reverse=True)
-            filtered = [ev for _dt, ev in scored]
-            trimmed = filtered[: max(0, max_items)]
+            scored.sort(key=lambda item: (item[0], item[1]))
+            filtered = [ev for _group, _ts, ev in scored]
+
+            today_events = [ev for group, _ts, ev in scored if group == 0]
+            other_events = [ev for group, _ts, ev in scored if group != 0]
+            remaining = max(0, max_items - len(today_events))
+            trimmed = today_events + other_events[:remaining]
 
             # Enrich the visible events with details (subtitle/body/sender/published_display).
             # Keep this lightweight by caching per event id.
@@ -550,16 +572,21 @@ class PolisenEventsAllSensor(CoordinatorEntity[dict[str, Any]], SensorEntity):
             return None
         _count, events = self._flatten_events(by_area)
 
-        scored: list[tuple[datetime, dict[str, Any]]] = []
+        now = datetime.now(timezone.utc)
+        today_local = dt_util.as_local(now).date()
+        yesterday_local = today_local - timedelta(days=1)
+
+        scored: list[tuple[int, float, dict[str, Any]]] = []
         for ev in events:
             dt = _event_sort_key(ev)
             if dt is None:
                 continue
-            scored.append((dt, ev))
-        scored.sort(key=lambda item: item[0], reverse=True)
+            group = _day_priority_group(dt, today_local, yesterday_local)
+            scored.append((group, -dt.timestamp(), ev))
+        scored.sort(key=lambda item: (item[0], item[1]))
         if not scored:
             return None
-        latest = scored[0][1]
+        latest = scored[0][2]
         name = latest.get("name")
         return name.strip() if isinstance(name, str) and name.strip() else None
 
@@ -583,16 +610,24 @@ class PolisenEventsAllSensor(CoordinatorEntity[dict[str, Any]], SensorEntity):
 
         total_count, events = self._flatten_events(by_area)
 
-        scored: list[tuple[datetime, dict[str, Any]]] = []
+        now = datetime.now(timezone.utc)
+        today_local = dt_util.as_local(now).date()
+        yesterday_local = today_local - timedelta(days=1)
+
+        scored: list[tuple[int, float, dict[str, Any]]] = []
         for ev in events:
             dt = _event_sort_key(ev)
             if dt is None:
                 continue
-            scored.append((dt, ev))
-        scored.sort(key=lambda item: item[0], reverse=True)
+            group = _day_priority_group(dt, today_local, yesterday_local)
+            scored.append((group, -dt.timestamp(), ev))
+        scored.sort(key=lambda item: (item[0], item[1]))
 
         max_items = int(cfg.get(CONF_MAX_ITEMS, DEFAULT_MAX_ITEMS))
-        trimmed = [ev for _dt, ev in scored][: max(0, max_items)]
+        today_events = [ev for group, _ts, ev in scored if group == 0]
+        other_events = [ev for group, _ts, ev in scored if group != 0]
+        remaining = max(0, max_items - len(today_events))
+        trimmed = today_events + other_events[:remaining]
         latest = trimmed[0] if trimmed else None
 
         return {
