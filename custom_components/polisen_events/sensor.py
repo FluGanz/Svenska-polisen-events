@@ -388,18 +388,20 @@ async def async_setup_entry(
                 if published_dt is None or published_dt.tzinfo is None:
                     continue
 
+                published_dt_utc = published_dt.astimezone(timezone.utc)
+                if published_dt_utc < cutoff:
+                    continue
+
                 event_dt = _parse_event_dt_from_name(str(ev.get("name") or ""), published_dt)
                 if event_dt is None or event_dt.tzinfo is None:
                     continue
 
-                event_dt_utc = event_dt.astimezone(timezone.utc)
-                if event_dt_utc < cutoff:
-                    continue
-
                 ev2 = dict(ev)
                 ev2["event_datetime"] = _format_dt_with_space_before_offset(event_dt)
-                group = _day_priority_group(event_dt, today_local, yesterday_local)
-                scored.append((group, -event_dt_utc.timestamp(), ev2))
+
+                # Prioritize by publish/update date (Polisen website uses "Uppdaterad …").
+                group = _day_priority_group(published_dt, today_local, yesterday_local)
+                scored.append((group, -published_dt_utc.timestamp(), ev2))
 
             scored.sort(key=lambda item: (item[0], item[1]))
             filtered = [ev for _group, _ts, ev in scored]
@@ -578,7 +580,8 @@ class PolisenEventsAllSensor(CoordinatorEntity[dict[str, Any]], SensorEntity):
 
         scored: list[tuple[int, float, dict[str, Any]]] = []
         for ev in events:
-            dt = _event_sort_key(ev)
+            published_dt = _parse_dt(str(ev.get("datetime") or ""))
+            dt = published_dt if isinstance(published_dt, datetime) and published_dt.tzinfo else _event_sort_key(ev)
             if dt is None:
                 continue
             group = _day_priority_group(dt, today_local, yesterday_local)
@@ -616,7 +619,8 @@ class PolisenEventsAllSensor(CoordinatorEntity[dict[str, Any]], SensorEntity):
 
         scored: list[tuple[int, float, dict[str, Any]]] = []
         for ev in events:
-            dt = _event_sort_key(ev)
+            published_dt = _parse_dt(str(ev.get("datetime") or ""))
+            dt = published_dt if isinstance(published_dt, datetime) and published_dt.tzinfo else _event_sort_key(ev)
             if dt is None:
                 continue
             group = _day_priority_group(dt, today_local, yesterday_local)
